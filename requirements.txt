@@ -1,0 +1,36 @@
+# World Model - Dependencies
+
+# Media acquisition
+yt-dlp>=2024.1.0
+
+# Audio/video processing
+ffmpeg-python>=0.2.0
+
+# Transcription
+openai-whisper>=20231117
+
+# Image processing
+opencv-python>=4.9.0
+Pillow>=10.0.0
+
+# OCR (optional, for visual text extraction)
+# pytesseract>=0.3.10
+# easyocr>=1.7.0
+
+# Utilities
+tqdm>=4.66.0          # Progress bars
+python-dateutil>=2.8.0
+
+# NLP / Entity extraction
+spacy>=3.7.0
+# Post-install: python -m spacy download en_core_web_md
+
+# Real-time display
+rich>=13.0.0          # Terminal UI for live streaming
+
+# File synchronization
+filelock>=3.12.0      # Cross-platform file locking
+
+# Future additions
+# torch>=2.0.0        # For GPU-accelerated Whisper
+# scikit-learn        # For semantic clustering

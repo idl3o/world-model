@@ -1,0 +1,42 @@
+# Output directory (processed media - large files)
+output/
+
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+*.egg-info/
+dist/
+build/
+eggs/
+*.egg
+
+# Virtual environments
+venv/
+env/
+.venv/
+
+# IDE
+.idea/
+.vscode/
+*.swp
+*.swo
+
+# Claude Code
+.claude/
+
+# OS files
+.DS_Store
+Thumbs.db
+nul
+
+# Whisper models (cached locally)
+*.pt
+
+# Logs
+*.log
+
+# Jupyter
+.ipynb_checkpoints/
