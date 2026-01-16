@@ -21,6 +21,7 @@ class ExtractedFrame:
     trigger_context: str
     width: int = 0
     height: int = 0
+    ocr_text: Optional[str] = None  # Extracted text from frame
 
 
 def download_video(url: str, work_dir: Path) -> Optional[Path]:
@@ -90,7 +91,8 @@ def extract_keyframes(
     video_path: Path,
     triggers: list,
     output_dir: Path,
-    max_frames: int = 50
+    max_frames: int = 50,
+    enable_ocr: bool = False
 ) -> list[ExtractedFrame]:
     """
     Extract frames at semantic trigger points.
@@ -100,6 +102,7 @@ def extract_keyframes(
         triggers: List of SemanticTrigger objects
         output_dir: Directory to save frames
         max_frames: Maximum number of frames to extract
+        enable_ocr: Whether to run OCR on extracted frames
 
     Returns:
         List of ExtractedFrame objects
@@ -130,21 +133,47 @@ def extract_keyframes(
         )
 
         if success:
+            ocr_text = None
+            if enable_ocr:
+                ocr_text = _run_ocr_on_frame(frame_path)
+
             extracted.append(ExtractedFrame(
                 timestamp=trigger.timestamp,
                 path=frame_path,
                 trigger_type=trigger.trigger_type,
-                trigger_context=trigger.context[:100]
+                trigger_context=trigger.context[:100],
+                ocr_text=ocr_text
             ))
 
     return extracted
+
+
+def _run_ocr_on_frame(frame_path: Path) -> Optional[str]:
+    """
+    Run OCR on a single frame.
+
+    Args:
+        frame_path: Path to frame image
+
+    Returns:
+        Extracted text, or None if no text found
+    """
+    try:
+        from .ocr import extract_text
+        result = extract_text(frame_path, min_confidence=0.4)
+        if result.text and result.confidence > 0.3:
+            return result.text
+    except Exception as e:
+        print(f"  Warning: OCR failed for {frame_path.name}: {e}")
+    return None
 
 
 def extract_keyframes_for_video(
     video_id: str,
     url: str,
     output_dir: Path,
-    max_frames: int = 30
+    max_frames: int = 30,
+    enable_ocr: bool = False
 ) -> list[ExtractedFrame]:
     """
     Full keyframe extraction pipeline for a video.
@@ -156,6 +185,7 @@ def extract_keyframes_for_video(
         url: Original URL (for downloading)
         output_dir: Base output directory
         max_frames: Maximum frames to extract
+        enable_ocr: Whether to run OCR on extracted frames
 
     Returns:
         List of ExtractedFrame objects
@@ -188,8 +218,9 @@ def extract_keyframes_for_video(
         return []
 
     # Extract frames
-    print(f"  Extracting {min(len(triggers), max_frames)} keyframes...")
-    frames = extract_keyframes(video_path, triggers, work_dir, max_frames)
+    ocr_msg = " with OCR" if enable_ocr else ""
+    print(f"  Extracting {min(len(triggers), max_frames)} keyframes{ocr_msg}...")
+    frames = extract_keyframes(video_path, triggers, work_dir, max_frames, enable_ocr)
 
     # Save frame manifest
     _save_frame_manifest(frames, work_dir)
@@ -199,14 +230,18 @@ def extract_keyframes_for_video(
 
 def _save_frame_manifest(frames: list[ExtractedFrame], work_dir: Path):
     """Save extracted frames metadata to JSON."""
+    frames_with_ocr = sum(1 for f in frames if f.ocr_text)
+
     manifest = {
         'frame_count': len(frames),
+        'frames_with_ocr': frames_with_ocr,
         'frames': [
             {
                 'timestamp': f.timestamp,
                 'path': str(f.path.name),
                 'trigger_type': f.trigger_type,
-                'trigger_context': f.trigger_context
+                'trigger_context': f.trigger_context,
+                'ocr_text': f.ocr_text
             }
             for f in frames
         ]
@@ -228,18 +263,54 @@ def format_timestamp(seconds: float) -> str:
 
 if __name__ == '__main__':
     import sys
+    import argparse
 
-    if len(sys.argv) < 2:
-        print("Usage: python -m src.frames <video_id> [url]")
-        sys.exit(1)
+    parser = argparse.ArgumentParser(
+        description="Extract keyframes at semantic trigger points"
+    )
+    parser.add_argument('video_id', help="Video ID to process")
+    parser.add_argument('url', nargs='?', help="Original URL (optional)")
+    parser.add_argument(
+        '--ocr',
+        action='store_true',
+        help="Run OCR on extracted frames to extract visual text"
+    )
+    parser.add_argument(
+        '--max-frames',
+        type=int,
+        default=30,
+        help="Maximum number of frames to extract (default: 30)"
+    )
+    parser.add_argument(
+        '--output', '-o',
+        type=Path,
+        default=Path(__file__).parent.parent / 'output',
+        help="Output directory"
+    )
 
-    video_id = sys.argv[1]
-    url = sys.argv[2] if len(sys.argv) > 2 else f"https://youtube.com/watch?v={video_id}"
-    output_dir = Path(__file__).parent.parent / 'output'
+    args = parser.parse_args()
 
-    print(f"Extracting keyframes for {video_id}")
-    frames = extract_keyframes_for_video(video_id, url, output_dir)
+    video_id = args.video_id
+    url = args.url or f"https://youtube.com/watch?v={video_id}"
+    output_dir = args.output
+
+    ocr_msg = " with OCR" if args.ocr else ""
+    print(f"Extracting keyframes{ocr_msg} for {video_id}")
+
+    frames = extract_keyframes_for_video(
+        video_id,
+        url,
+        output_dir,
+        max_frames=args.max_frames,
+        enable_ocr=args.ocr
+    )
+
     print(f"Extracted {len(frames)} frames")
+    frames_with_ocr = sum(1 for f in frames if f.ocr_text)
+    if args.ocr:
+        print(f"  {frames_with_ocr} frames with detected text")
 
     for f in frames[:5]:
-        print(f"  [{format_timestamp(f.timestamp)}] {f.trigger_type}: {f.trigger_context[:50]}...")
+        ts = format_timestamp(f.timestamp)
+        ocr_preview = f" | OCR: {f.ocr_text[:40]}..." if f.ocr_text else ""
+        print(f"  [{ts}] {f.trigger_type}: {f.trigger_context[:40]}...{ocr_preview}")

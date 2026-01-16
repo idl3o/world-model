@@ -91,7 +91,14 @@ class ExtractedContent:
     concepts: Optional['VideoConceptData'] = None  # Entity/concept graph data
 
 
-def extract(assets, work_dir: Path, extract_concepts: bool = True) -> ExtractedContent:
+def extract(
+    assets,
+    work_dir: Path,
+    extract_concepts: bool = True,
+    enable_diarization: bool = False,
+    hf_token: Optional[str] = None,
+    num_speakers: Optional[int] = None
+) -> ExtractedContent:
     """
     Extract semantic fragments from media assets.
 
@@ -99,19 +106,36 @@ def extract(assets, work_dir: Path, extract_concepts: bool = True) -> ExtractedC
         assets: MediaAssets from transform stage
         work_dir: Working directory for this video
         extract_concepts: Whether to extract entities/concepts (default True)
+        enable_diarization: Whether to run speaker diarization (default False)
+        hf_token: HuggingFace token for diarization (or use HF_TOKEN env var)
+        num_speakers: Number of speakers if known (helps diarization accuracy)
 
     Returns:
         ExtractedContent with transcript, keyframes, and concepts
     """
     content = ExtractedContent(video_id=assets.video_id)
 
-    # Try existing subtitles first, fall back to Whisper
-    if assets.subtitles_path and assets.subtitles_path.exists():
-        content.transcript = _parse_existing_subtitles(assets.subtitles_path)
-        print(f"  Using existing subtitles: {len(content.transcript)} segments")
-    elif assets.audio_path and assets.audio_path.exists():
-        content.transcript = _transcribe_with_whisper(assets.audio_path)
-        print(f"  Transcribed with Whisper: {len(content.transcript)} segments")
+    # Diarization path: use WhisperX for transcription + diarization
+    if enable_diarization and assets.audio_path and assets.audio_path.exists():
+        try:
+            content.transcript = _transcribe_with_diarization(
+                assets.audio_path,
+                hf_token=hf_token,
+                num_speakers=num_speakers
+            )
+            print(f"  Transcribed with diarization: {len(content.transcript)} segments")
+        except Exception as e:
+            print(f"  Warning: Diarization failed ({e}), falling back to standard transcription")
+            enable_diarization = False
+
+    # Standard path: existing subtitles or Whisper fallback
+    if not content.transcript:
+        if assets.subtitles_path and assets.subtitles_path.exists():
+            content.transcript = _parse_existing_subtitles(assets.subtitles_path)
+            print(f"  Using existing subtitles: {len(content.transcript)} segments")
+        elif assets.audio_path and assets.audio_path.exists():
+            content.transcript = _transcribe_with_whisper(assets.audio_path)
+            print(f"  Transcribed with Whisper: {len(content.transcript)} segments")
 
     # Save transcript
     _save_transcript(content.transcript, work_dir)
@@ -237,6 +261,33 @@ def _transcribe_with_whisper(audio_path: Path) -> list[TranscriptSegment]:
             end=seg['end'],
             text=seg['text'].strip()
         ))
+
+    return segments
+
+
+def _transcribe_with_diarization(
+    audio_path: Path,
+    hf_token: Optional[str] = None,
+    num_speakers: Optional[int] = None
+) -> list[TranscriptSegment]:
+    """
+    Transcribe audio with speaker diarization using WhisperX.
+
+    Args:
+        audio_path: Path to audio file
+        hf_token: HuggingFace token (or use HF_TOKEN env var)
+        num_speakers: Number of speakers if known
+
+    Returns:
+        List of TranscriptSegments with speaker labels
+    """
+    from .diarize import transcribe_and_diarize
+
+    segments, diarization = transcribe_and_diarize(
+        audio_path,
+        hf_token=hf_token,
+        num_speakers=num_speakers
+    )
 
     return segments
 

@@ -2,31 +2,36 @@
 
 > Giving digital intelligence eyes, ears, and taste for media.
 
+**[Read the Whitepaper](WHITEPAPER.md)** — Technical details on architecture, design philosophy, and empirical validation.
+
 ## Vision
 
-Build a **transformation-extraction-digestion** pipeline that converts rich media (video, podcasts, streams) into native formats that AI systems can perceive and reason about.
+Build a **transformation-extraction-digestion** pipeline that converts rich media (video, podcasts, streams, local files) into native formats that AI systems can perceive and reason about.
 
 The goal is not mere transcription—it's **sense-making**. We want to preserve the semantic richness, temporal structure, and multimodal relationships that make media meaningful.
 
 ## Current Capabilities
 
-### Digested Content (6 hours, 61,680 words)
-| Content | Duration | Type Detected |
-|---------|----------|---------------|
-| Form & Time Podcast | 19 min | PODCAST |
-| Consciousness Iceberg | 15 min | LECTURE |
-| Fireship Python | 2 min | TUTORIAL |
-| Lex Fridman x Sam Harris | 197 min | PODCAST |
-| Diary of CEO x Tara Swart | 124 min | PODCAST |
+### Digested Content (6.2 hours, 65,000+ words)
+| Content | Duration | Type Detected | Source |
+|---------|----------|---------------|--------|
+| Form & Time Podcast | 19 min | PODCAST | YouTube |
+| Consciousness Iceberg | 15 min | LECTURE | YouTube |
+| Fireship Python | 2 min | TUTORIAL | YouTube |
+| Lex Fridman x Sam Harris | 197 min | PODCAST | YouTube |
+| Diary of CEO x Tara Swart | 124 min | PODCAST | YouTube |
+| World Model Whitepaper Review | 13 min | PODCAST | NotebookLM (local) |
 
 ### Features Working
-- **Multi-format ingestion**: YouTube videos, podcasts
+- **Multi-format ingestion**: YouTube videos, podcasts, local audio/video files (MP3, M4A, WAV, MP4, etc.)
 - **Live stream capture**: Twitch, YouTube Live, HLS, RTMP with chunked processing
 - **Real-time sync**: Live transcript display, incremental entity extraction, multi-device file sync
 - **Semantic analysis**: Auto-detects content type (podcast/lecture/tutorial)
-- **Concept graph**: Entity extraction, co-occurrence tracking, cross-video knowledge index
-- **Cross-content search**: Query across all digested media (keyword + entity-based)
-- **Keyframe extraction**: Visual frames at semantic trigger points
+- **Speaker diarization**: Who said what when (via WhisperX + pyannote)
+- **Topical proximity index**: Entity extraction, temporal co-occurrence, cross-video knowledge index
+- **Cross-content search**: Query across all digested media (keyword, entity, semantic)
+- **Topic clustering**: Discover themes across all content automatically
+- **Keyframe extraction**: Visual frames at semantic trigger points with OCR
 - **Unified output**: Markdown + JSON for AI consumption
 
 ## Architecture
@@ -38,7 +43,7 @@ The goal is not mere transcription—it's **sense-making**. We want to preserve 
 │  TRANSFORM  │     EXTRACT     │     SEMANTIC     │       DIGEST        │
 │             │                 │                  │                     │
 │  URL/File   │  Audio → Text   │  Content-Type    │  Unified Document   │
-│  → Assets   │  Video → Frames │  Detection       │  + Keyframes        │
+│  → Assets   │  Video → Frames │  Detection       │  + Proximity Index  │
 │             │                 │  Trigger Points  │  + Search Index     │
 └─────────────┴─────────────────┴──────────────────┴─────────────────────┘
 ```
@@ -49,6 +54,15 @@ The goal is not mere transcription—it's **sense-making**. We want to preserve 
 # Full pipeline: Transform + Extract + Digest + Concepts
 python -m src.main "https://youtube.com/watch?v=..."
 
+# Local audio/video files (auto-detected)
+python -m src.main "/path/to/podcast.mp3"
+python -m src.main "/path/to/recording.m4a" --title "Custom Title"
+python -m src.main "/path/to/video.mp4" --diarize --num-speakers 2
+
+# With speaker diarization (who said what)
+python -m src.main "https://youtube.com/watch?v=..." --diarize
+python -m src.main "https://youtube.com/watch?v=..." --diarize --num-speakers 2
+
 # Live stream capture (auto-detected from URL)
 python -m src.main "https://twitch.tv/channel"
 python -m src.stream "https://twitch.tv/channel" --duration 120
@@ -58,8 +72,14 @@ python -m src.stream "https://twitch.tv/channel" --duration 120 --live
 
 # Cross-content search
 python -m src.search "consciousness"
-python -m src.search --entity "Sam Harris"    # Entity-based search
-python -m src.search --topic "meditation"     # Topic with expansion
+python -m src.search --semantic "meaning of life"  # Embedding-based semantic search
+python -m src.search --entity "Sam Harris"         # Entity-based search
+python -m src.search --topic "meditation"          # Topic with expansion
+
+# Topic clustering
+python -m src.cluster                    # Discover topics across all content
+python -m src.cluster --n-clusters 15    # Custom number of topics
+python -m src.cluster --query "free will" # Find cluster for a query
 
 # Concept graph management
 python -m src.concepts <video_id>             # Extract entities for one video
@@ -68,6 +88,9 @@ python -m src.concepts --query "Sam Harris"   # Query entity across all content
 
 # Extract keyframes at semantic triggers
 python -m src.frames <video_id> [url]
+
+# Extract keyframes with OCR (reads text from slides/code)
+python -m src.frames <video_id> --ocr
 
 # Check dependencies
 python src/utils.py
@@ -95,18 +118,23 @@ The semantic engine auto-detects content type and extracts meaningful moments:
 
 ```
 world-model/
-├── CLAUDE.md              # This file
+├── CLAUDE.md              # This file (README)
+├── WHITEPAPER.md          # Technical whitepaper
 ├── requirements.txt       # Python dependencies
 ├── src/
 │   ├── __init__.py
 │   ├── main.py            # Pipeline orchestration
-│   ├── transform.py       # Stage 1: URL → Assets
+│   ├── transform.py       # Stage 1: URL/File → Assets
 │   ├── extract.py         # Stage 2: Assets → Transcript + Concepts
+│   ├── diarize.py         # Speaker diarization (WhisperX)
 │   ├── semantic.py        # Content-type detection & triggers
-│   ├── concepts.py        # Entity extraction & knowledge graph
+│   ├── concepts.py        # Entity extraction & topical proximity
 │   ├── digest.py          # Stage 3: Fragments → Document
 │   ├── frames.py          # Keyframe extraction
-│   ├── search.py          # Cross-content search (keyword + entity)
+│   ├── ocr.py             # OCR for visual text extraction
+│   ├── search.py          # Cross-content search (keyword + entity + semantic)
+│   ├── embeddings.py      # Text embeddings for semantic operations
+│   ├── cluster.py         # Topic clustering across content
 │   ├── stream.py          # Live stream capture (Twitch/YouTube/HLS/RTMP)
 │   ├── realtime.py        # Event bus for real-time updates
 │   ├── sync.py            # File locking for multi-device sync
@@ -137,7 +165,8 @@ Each digested video produces:
 | `manifest.json` | Structured metadata, stats, file paths |
 | `digest.md` | AI-readable narrative with timestamps |
 | `transcript.json` | Full timestamped transcript |
-| `concepts.json` | Extracted entities, co-occurrences |
+| `concepts.json` | Extracted entities, topical proximity |
+| `embeddings.npz` | Semantic embeddings for search/clustering |
 | `frames/` | Keyframes at semantic trigger points |
 | `frames_manifest.json` | Frame metadata with trigger context |
 
@@ -145,7 +174,8 @@ Global index:
 
 | File | Purpose |
 |------|---------|
-| `concept_graph.json` | Cross-video entity index with relationships |
+| `concept_graph.json` | Cross-video entity index with topical proximity |
+| `topic_clusters.json` | Discovered topic clusters across all content |
 
 Live streams additionally produce:
 
@@ -159,18 +189,21 @@ Live streams additionally produce:
 | Component | Tool | Status |
 |-----------|------|--------|
 | Download | `yt-dlp` | Working |
+| Local file ingestion | `ffmpeg` + `ffprobe` | Working |
 | Audio processing | `ffmpeg` | Working |
 | Transcription | YouTube subs / Whisper | Working |
-| Semantic analysis | Custom patterns | Working |
+| Semantic analysis | Custom patterns (50+) | Working |
 | Entity extraction | SpaCy NER (`en_core_web_md`) | Working |
-| Concept graph | Custom (JSON-based) | Working |
+| Topical proximity | Custom (JSON-based, 30s window) | Working |
 | Frame extraction | `ffmpeg` | Working |
-| Cross-content search | Keyword + Entity | Working |
+| OCR | EasyOCR | Working |
+| Cross-content search | Keyword + Entity + Semantic | Working |
+| Topic clustering | K-means + sentence-transformers | Working |
 | Live streaming | `yt-dlp` + `ffmpeg` chunked | Working |
 | Real-time display | `rich` terminal UI | Working |
 | Multi-device sync | File locking + versioning | Working |
 | Incremental processing | Per-chunk extraction | Working |
-| Speaker diarization | - | Planned |
+| Speaker diarization | WhisperX + pyannote | Working |
 
 ## Design Principles
 
@@ -182,12 +215,17 @@ Live streams additionally produce:
 
 ## Next Directions
 
-- [ ] Speaker diarization (who said what when)
+- [x] Speaker diarization (who said what when)
 - [x] Real-time/streaming processing
-- [ ] OCR on keyframes (extract text from slides/code)
-- [x] Entity extraction & concept graph
-- [ ] Embedding-based semantic search (upgrade from co-occurrence)
-- [ ] Topic clustering across content
+- [x] OCR on keyframes (extract text from slides/code)
+- [x] Entity extraction & topical proximity index
+- [x] Embedding-based semantic search
+- [x] Topic clustering across content
+- [x] Local file ingestion (MP3, M4A, WAV, MP4, etc.)
+- [ ] Relation extraction (typed relationships beyond proximity)
+- [ ] Multi-modal fusion (audio + visual + text signals)
+- [ ] Abstractive summarization at multiple granularities
+- [ ] Cross-lingual support
 
 ---
 

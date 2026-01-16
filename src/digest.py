@@ -8,6 +8,7 @@ import json
 from pathlib import Path
 from datetime import timedelta
 from typing import Optional
+from collections import defaultdict
 
 
 def digest(assets, content, work_dir: Path) -> Path:
@@ -70,6 +71,12 @@ def _generate_markdown(assets, content) -> str:
             lines.append(f"- [{start}] {title}")
         lines.append("")
 
+    # Speaker summary (if diarization was used)
+    if content.transcript:
+        speaker_summary = _format_speaker_summary(content.transcript)
+        if speaker_summary:
+            lines.extend(speaker_summary)
+
     # Full transcript with timestamps
     if content.transcript:
         lines.append("## Transcript")
@@ -95,7 +102,6 @@ def _generate_markdown(assets, content) -> str:
         lines.append("")
 
         # Group entities by type
-        from collections import defaultdict
         by_type = defaultdict(list)
         for entity in content.concepts.entities.values():
             by_type[entity.entity_type].append(entity)
@@ -132,23 +138,51 @@ def _generate_markdown(assets, content) -> str:
     return "\n".join(lines)
 
 
-def _format_transcript(segments) -> list[str]:
-    """Format transcript with intelligent paragraph grouping."""
+def _format_transcript(segments, speaker_names: Optional[dict] = None) -> list[str]:
+    """
+    Format transcript with intelligent paragraph grouping and speaker labels.
+
+    Args:
+        segments: List of TranscriptSegment
+        speaker_names: Optional mapping of speaker IDs to names
+            e.g., {"SPEAKER_00": "Lex Fridman", "SPEAKER_01": "Sam Harris"}
+
+    Returns:
+        Formatted lines for markdown output
+    """
     if not segments:
         return ["*No transcript available*"]
 
     lines = []
     current_paragraph = []
+    current_speaker = None
     last_end = 0
 
+    # Check if any segment has a speaker
+    has_speakers = any(seg.speaker for seg in segments)
+
     for seg in segments:
-        # Start new paragraph on significant pause (>2 seconds)
-        if seg.start - last_end > 2.0 and current_paragraph:
+        speaker = seg.speaker
+        if speaker_names and speaker:
+            speaker = speaker_names.get(speaker, speaker)
+
+        # Start new paragraph on speaker change or significant pause
+        speaker_changed = has_speakers and speaker != current_speaker and speaker is not None
+        pause_detected = seg.start - last_end > 2.0
+
+        if (speaker_changed or pause_detected) and current_paragraph:
             timestamp = _format_duration(current_paragraph[0].start)
             text = " ".join(s.text for s in current_paragraph)
-            lines.append(f"**[{timestamp}]** {text}")
+
+            if has_speakers and current_speaker:
+                lines.append(f"**[{timestamp}] {current_speaker}:** {text}")
+            else:
+                lines.append(f"**[{timestamp}]** {text}")
             lines.append("")
             current_paragraph = []
+
+        if speaker_changed:
+            current_speaker = speaker
 
         current_paragraph.append(seg)
         last_end = seg.end
@@ -157,8 +191,58 @@ def _format_transcript(segments) -> list[str]:
     if current_paragraph:
         timestamp = _format_duration(current_paragraph[0].start)
         text = " ".join(s.text for s in current_paragraph)
-        lines.append(f"**[{timestamp}]** {text}")
 
+        if has_speakers and current_speaker:
+            lines.append(f"**[{timestamp}] {current_speaker}:** {text}")
+        else:
+            lines.append(f"**[{timestamp}]** {text}")
+
+    return lines
+
+
+def _format_speaker_summary(segments) -> list[str]:
+    """
+    Generate speaker statistics section.
+
+    Args:
+        segments: List of TranscriptSegment
+
+    Returns:
+        Formatted lines for speaker summary
+    """
+    if not segments:
+        return []
+
+    speaker_stats = defaultdict(lambda: {"duration": 0.0, "segments": 0, "words": 0})
+
+    for seg in segments:
+        if seg.speaker:
+            speaker_stats[seg.speaker]["duration"] += seg.end - seg.start
+            speaker_stats[seg.speaker]["segments"] += 1
+            speaker_stats[seg.speaker]["words"] += len(seg.text.split())
+
+    if not speaker_stats:
+        return []
+
+    lines = ["## Speakers", ""]
+
+    # Sort by speaking time
+    sorted_speakers = sorted(
+        speaker_stats.items(),
+        key=lambda x: -x[1]["duration"]
+    )
+
+    total_duration = sum(s["duration"] for s in speaker_stats.values())
+
+    for speaker, stats in sorted_speakers:
+        duration_str = _format_duration(stats["duration"])
+        percentage = (stats["duration"] / total_duration * 100) if total_duration > 0 else 0
+        lines.append(
+            f"- **{speaker}**: {duration_str} ({percentage:.0f}%) - "
+            f"{stats['words']:,} words across {stats['segments']} segments"
+        )
+
+    lines.append("")
     return lines
 
 
@@ -291,7 +375,6 @@ def generate_partial_digest(
         lines.append("## Key Entities")
         lines.append("")
 
-        from collections import defaultdict
         by_type = defaultdict(list)
         for entity in content.concepts.entities.values():
             by_type[entity.entity_type].append(entity)

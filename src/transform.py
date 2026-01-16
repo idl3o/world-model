@@ -6,9 +6,17 @@ Handles media acquisition and initial processing.
 
 import json
 import subprocess
+import hashlib
+import shutil
 from pathlib import Path
 from dataclasses import dataclass, asdict
 from typing import Optional
+
+
+def is_local_file(path_or_url: str) -> bool:
+    """Check if input is a local file path."""
+    p = Path(path_or_url)
+    return p.exists() and p.is_file()
 
 
 @dataclass
@@ -178,6 +186,96 @@ def _save_metadata(assets: MediaAssets, work_dir: Path):
 
     with open(meta_path, 'w', encoding='utf-8') as f:
         json.dump(data, f, indent=2, ensure_ascii=False)
+
+
+def transform_local(file_path: str, output_dir: Path, title: str = None) -> MediaAssets:
+    """
+    Transform a local audio/video file into media assets.
+
+    Args:
+        file_path: Path to local media file
+        output_dir: Base directory for outputs
+        title: Optional title (defaults to filename)
+
+    Returns:
+        MediaAssets with paths to processed content
+    """
+    source = Path(file_path)
+    if not source.exists():
+        raise FileNotFoundError(f"File not found: {file_path}")
+
+    # Generate a stable ID from file path
+    video_id = hashlib.md5(source.name.encode()).hexdigest()[:11]
+    work_dir = output_dir / video_id
+    work_dir.mkdir(parents=True, exist_ok=True)
+
+    # Get metadata via ffprobe
+    metadata = _probe_media(source)
+
+    # Copy or convert audio
+    audio_path = _prepare_audio(source, work_dir)
+
+    assets = MediaAssets(
+        video_id=video_id,
+        title=title or source.stem,
+        description=f"Local file: {source.name}",
+        duration=metadata.get('duration', 0),
+        channel="Local",
+        upload_date="",
+        chapters=[],
+        audio_path=audio_path,
+        subtitles_path=None,
+        thumbnail_path=None,
+    )
+
+    _save_metadata(assets, work_dir)
+    return assets
+
+
+def _probe_media(file_path: Path) -> dict:
+    """Get media metadata via ffprobe."""
+    try:
+        result = subprocess.run([
+            'ffprobe',
+            '-v', 'quiet',
+            '-print_format', 'json',
+            '-show_format',
+            '-show_streams',
+            str(file_path)
+        ], capture_output=True, text=True)
+
+        if result.returncode == 0:
+            data = json.loads(result.stdout)
+            duration = float(data.get('format', {}).get('duration', 0))
+            return {'duration': duration}
+    except Exception:
+        pass
+    return {'duration': 0}
+
+
+def _prepare_audio(source: Path, work_dir: Path) -> Path:
+    """Copy or convert audio file to work directory."""
+    target = work_dir / 'audio.mp3'
+
+    # If already mp3, just copy
+    if source.suffix.lower() == '.mp3':
+        shutil.copy2(source, target)
+        return target
+
+    # Convert to mp3 via ffmpeg
+    result = subprocess.run([
+        'ffmpeg', '-y',
+        '-i', str(source),
+        '-vn',  # No video
+        '-acodec', 'libmp3lame',
+        '-q:a', '2',  # High quality
+        str(target)
+    ], capture_output=True, text=True)
+
+    if result.returncode != 0:
+        raise RuntimeError(f"Failed to convert audio: {result.stderr}")
+
+    return target
 
 
 if __name__ == '__main__':

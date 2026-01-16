@@ -204,6 +204,78 @@ def search_by_topic(
     return unique_results[:max_results]
 
 
+def search_semantic(
+    query: str,
+    output_dir: Path,
+    max_results: int = 20
+) -> list[SearchResult]:
+    """
+    Semantic search using embeddings.
+
+    Finds content similar in meaning to the query, not just keyword matches.
+
+    Args:
+        query: Natural language query
+        output_dir: Base output directory
+        max_results: Maximum results to return
+
+    Returns:
+        List of SearchResult objects, sorted by semantic similarity
+    """
+    try:
+        from .embeddings import (
+            embed_text, load_all_embeddings, cosine_similarity_batch
+        )
+    except ImportError:
+        print("  Warning: embeddings module not available, falling back to keyword search")
+        return search_all(query, output_dir, max_results)
+
+    # Embed query
+    query_embedding = embed_text(query)
+    if query_embedding is None:
+        return search_all(query, output_dir, max_results)
+
+    # Load all embeddings
+    print("  Loading embeddings...")
+    indices = load_all_embeddings(output_dir)
+
+    if not indices:
+        return []
+
+    # Collect all results
+    all_results = []
+
+    for video_id, index in indices.items():
+        # Get video title
+        manifest_path = output_dir / video_id / 'manifest.json'
+        title = video_id
+        if manifest_path.exists():
+            with open(manifest_path, 'r', encoding='utf-8') as f:
+                manifest = json.load(f)
+                title = manifest.get('metadata', {}).get('title', video_id)
+
+        # Compute similarities
+        similarities = cosine_similarity_batch(query_embedding, index.embeddings)
+
+        # Add results above threshold
+        for i, sim in enumerate(similarities):
+            if sim > 0.3:  # Similarity threshold
+                all_results.append(SearchResult(
+                    video_id=video_id,
+                    video_title=title,
+                    timestamp=index.segment_timestamps[i],
+                    text=index.segment_texts[i],
+                    score=float(sim) * 10,  # Scale to match keyword scoring
+                    context_before="",
+                    context_after=""
+                ))
+
+    # Sort by score
+    all_results.sort(key=lambda r: r.score, reverse=True)
+
+    return all_results[:max_results]
+
+
 def search_by_entity(
     entity_name: str,
     output_dir: Path,
@@ -328,6 +400,8 @@ if __name__ == '__main__':
                         help="Search by entity using concept graph")
     parser.add_argument('--topic', '-t', action='store_true',
                         help="Search by topic with expansion")
+    parser.add_argument('--semantic', '-s', action='store_true',
+                        help="Use semantic search (embedding-based)")
     parser.add_argument('--output', '-o', type=Path,
                         default=Path(__file__).parent.parent / 'output',
                         help="Output directory")
@@ -348,7 +422,10 @@ if __name__ == '__main__':
     query = ' '.join(args.query)
     print(f"Searching for: '{query}'")
 
-    if args.entity:
+    if args.semantic:
+        print("(Semantic search using embeddings)")
+        results = search_semantic(query, output_dir)
+    elif args.entity:
         print("(Entity search using concept graph)")
         results = search_by_entity(query, output_dir)
     elif args.topic:

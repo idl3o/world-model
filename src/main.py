@@ -10,7 +10,7 @@ Usage:
 import argparse
 from pathlib import Path
 
-from .transform import transform, extract_video_id
+from .transform import transform, transform_local, extract_video_id, is_local_file
 from .extract import extract, load_transcript, ExtractedContent
 from .digest import digest
 from .stream import detect_stream_type, run_stream_pipeline
@@ -22,7 +22,13 @@ def main():
     )
     parser.add_argument(
         'url',
-        help="YouTube URL or video ID"
+        help="YouTube URL, video ID, or local file path"
+    )
+    parser.add_argument(
+        '--title', '-t',
+        type=str,
+        default=None,
+        help="Custom title (for local files)"
     )
     parser.add_argument(
         '--output', '-o',
@@ -45,6 +51,23 @@ def main():
         action='store_true',
         help="Skip concept/entity extraction"
     )
+    parser.add_argument(
+        '--diarize',
+        action='store_true',
+        help="Enable speaker diarization (requires HF_TOKEN)"
+    )
+    parser.add_argument(
+        '--hf-token',
+        type=str,
+        default=None,
+        help="HuggingFace token for diarization (or set HF_TOKEN env var)"
+    )
+    parser.add_argument(
+        '--num-speakers',
+        type=int,
+        default=None,
+        help="Number of speakers if known (helps diarization accuracy)"
+    )
 
     args = parser.parse_args()
 
@@ -53,27 +76,37 @@ def main():
     print(f"Input: {args.url}")
     print()
 
-    # Check if this is a live stream
-    stream_type = detect_stream_type(args.url)
-    if stream_type is not None:
-        print(f"Detected live stream: {stream_type.value}")
-        print("Routing to stream pipeline...")
-        print()
-        session = run_stream_pipeline(args.url, args.output)
-        return session.work_dir
-
-    video_id = extract_video_id(args.url)
-    work_dir = args.output / video_id
-
-    # Stage 1: Transform
-    if args.skip_download and work_dir.exists():
-        print(f"[1/3] Transform: Using existing assets in {work_dir}")
-        assets = _load_assets(work_dir)
-    else:
-        print(f"[1/3] Transform: Downloading media...")
-        assets = transform(args.url, args.output)
+    # Check if this is a local file
+    if is_local_file(args.url):
+        print(f"Detected local file")
+        print(f"[1/3] Transform: Processing local file...")
+        assets = transform_local(args.url, args.output, title=args.title)
         print(f"      Audio: {assets.audio_path}")
         print(f"      Duration: {assets.duration:.0f}s")
+        video_id = assets.video_id
+        work_dir = args.output / video_id
+    else:
+        # Check if this is a live stream
+        stream_type = detect_stream_type(args.url)
+        if stream_type is not None:
+            print(f"Detected live stream: {stream_type.value}")
+            print("Routing to stream pipeline...")
+            print()
+            session = run_stream_pipeline(args.url, args.output)
+            return session.work_dir
+
+        video_id = extract_video_id(args.url)
+        work_dir = args.output / video_id
+
+        # Stage 1: Transform
+        if args.skip_download and work_dir.exists():
+            print(f"[1/3] Transform: Using existing assets in {work_dir}")
+            assets = _load_assets(work_dir)
+        else:
+            print(f"[1/3] Transform: Downloading media...")
+            assets = transform(args.url, args.output)
+            print(f"      Audio: {assets.audio_path}")
+            print(f"      Duration: {assets.duration:.0f}s")
 
     # Stage 2: Extract
     if args.skip_transcribe and (work_dir / 'transcript.json').exists():
@@ -95,7 +128,14 @@ def main():
                 print(f"      Skipping concepts: {e}")
     else:
         print(f"[2/3] Extract: Processing content...")
-        content = extract(assets, work_dir, extract_concepts=not args.skip_concepts)
+        content = extract(
+            assets,
+            work_dir,
+            extract_concepts=not args.skip_concepts,
+            enable_diarization=args.diarize,
+            hf_token=args.hf_token,
+            num_speakers=args.num_speakers
+        )
 
     print(f"      Transcript: {len(content.transcript)} segments")
 
